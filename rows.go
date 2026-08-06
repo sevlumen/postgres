@@ -288,9 +288,13 @@ func decodeValue(field fieldDescription, data []byte) (driver.Value, error) {
 	case 20, 21, 23, 26:
 		value, err := strconv.ParseInt(text, 10, 64)
 		return value, err
-	case 700, 701, 1700:
+	case 700, 701:
 		value, err := strconv.ParseFloat(text, 64)
 		return value, err
+	case 1700:
+		// Preserve NUMERIC precision. database/sql can scan the string into
+		// string/[]byte or application decimal types implementing Scanner.
+		return text, nil
 	case 17:
 		if strings.HasPrefix(text, `\x`) {
 			value, err := hex.DecodeString(text[2:])
@@ -301,25 +305,51 @@ func decodeValue(field fieldDescription, data []byte) (driver.Value, error) {
 		value, err := time.Parse("2006-01-02", text)
 		return value, err
 	case 1114:
-		for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
-			if value, err := time.ParseInLocation(layout, text, time.UTC); err == nil {
-				return value, nil
-			}
-		}
-		return text, nil
+		value, err := parseTimestamp(text)
+		return value, err
 	case 1184:
-		normalized := strings.Replace(text, " ", "T", 1)
-		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999Z07:00", "2006-01-02T15:04:05Z07:00"} {
-			if value, err := time.Parse(layout, normalized); err == nil {
-				return value, nil
-			}
-		}
-		return text, nil
+		value, err := parseTimestampTZ(text)
+		return value, err
 	case 114, 3802:
 		return append([]byte(nil), data...), nil
 	default:
 		return text, nil
 	}
+}
+
+func parseTimestamp(value string) (time.Time, error) {
+	if value == "infinity" || value == "-infinity" {
+		return time.Time{}, fmt.Errorf("timestamp %q cannot be represented as time.Time", value)
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamp %q", value)
+}
+
+func parseTimestampTZ(value string) (time.Time, error) {
+	if value == "infinity" || value == "-infinity" {
+		return time.Time{}, fmt.Errorf("timestamptz %q cannot be represented as time.Time", value)
+	}
+	normalized := strings.Replace(value, " ", "T", 1)
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.999999999Z07:00",
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04:05.999999999Z0700",
+		"2006-01-02T15:04:05Z0700",
+		"2006-01-02T15:04:05.999999999Z07",
+		"2006-01-02T15:04:05Z07",
+	} {
+		if parsed, err := time.Parse(layout, normalized); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamptz %q", value)
 }
 
 func databaseTypeName(oid uint32) string {

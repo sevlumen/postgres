@@ -198,17 +198,31 @@ func (c *conn) startCancelWatcher(ctx context.Context) func() {
 	if ctx.Done() == nil {
 		return func() {}
 	}
-	done := make(chan struct{})
+	stop := make(chan struct{})
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		select {
 		case <-ctx.Done():
+			// Bound the original connection read even when the caller used a
+			// manually canceled context without a deadline. The connection is
+			// reusable only after the backend returns ReadyForQuery.
+			_ = c.network.SetReadDeadline(time.Now().Add(c.config.CancelTimeout))
 			cancelCtx, cancel := context.WithTimeout(context.Background(), c.config.CancelTimeout)
 			_ = c.cancel(cancelCtx)
 			cancel()
-		case <-done:
+		case <-stop:
 		}
 	}()
-	return func() { close(done) }
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			// Waiting is essential: a cancellation goroutine that outlives the
+			// operation could otherwise cancel the next query on this backend.
+			<-finished
+		})
+	}
 }
 
 func (c *conn) cancel(ctx context.Context) error {

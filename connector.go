@@ -63,8 +63,11 @@ func connect(ctx context.Context, config Config) (*conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	connectCtx, cancelConnect := context.WithTimeout(ctx, config.ConnectTimeout)
+	defer cancelConnect()
+
 	dialer := net.Dialer{Timeout: config.ConnectTimeout, KeepAlive: 30 * time.Second}
-	networkConn, err := dialer.DialContext(ctx, "tcp", config.address())
+	networkConn, err := dialer.DialContext(connectCtx, "tcp", config.address())
 	if err != nil {
 		return nil, fmt.Errorf("postgres: dial %s: %w", config.address(), err)
 	}
@@ -91,7 +94,7 @@ func connect(ctx context.Context, config Config) (*conn, error) {
 				return nil, err
 			}
 			tlsConn := tls.Client(networkConn, tlsConfig)
-			if err := tlsConn.HandshakeContext(ctx); err != nil {
+			if err := tlsConn.HandshakeContext(connectCtx); err != nil {
 				return nil, fmt.Errorf("postgres: TLS handshake: %w", err)
 			}
 			networkConn = tlsConn
@@ -104,8 +107,14 @@ func connect(ctx context.Context, config Config) (*conn, error) {
 	}
 
 	connection := newConn(networkConn, config, secure)
-	if err := connection.startup(ctx); err != nil {
+	if deadline, ok := connectCtx.Deadline(); ok {
+		_ = networkConn.SetDeadline(deadline)
+	}
+	if err := connection.startup(connectCtx); err != nil {
 		return nil, err
+	}
+	if err := networkConn.SetDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("postgres: clear startup deadline: %w", err)
 	}
 	cleanup = false
 	return connection, nil
@@ -164,6 +173,7 @@ func (c *conn) startup(ctx context.Context) error {
 		return fmt.Errorf("postgres: send startup message: %w", err)
 	}
 	var scramClient *scram.Client
+	authenticated := false
 	for {
 		message, err := c.read()
 		if err != nil {
@@ -178,6 +188,7 @@ func (c *conn) startup(ctx context.Context) error {
 			}
 			switch code {
 			case 0:
+				authenticated = true
 			case 3:
 				if !c.secure && !c.config.AllowInsecureAuthentication {
 					return errors.New("postgres: cleartext password authentication requires TLS")
@@ -253,6 +264,9 @@ func (c *conn) startup(ctx context.Context) error {
 		case 'N':
 			c.lastNotice = parseError(message.Body)
 		case 'Z':
+			if !authenticated {
+				return errors.New("postgres: server became ready before authentication completed")
+			}
 			if len(message.Body) != 1 {
 				return errors.New("postgres: malformed ReadyForQuery")
 			}
