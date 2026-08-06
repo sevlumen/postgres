@@ -52,12 +52,16 @@ func (r *rows) Close() error {
 		r.done = true
 		return nil
 	}
-	cancelCtx, cancel := context.WithTimeout(context.Background(), r.conn.config.CancelTimeout)
-	_ = r.conn.cancel(cancelCtx)
-	cancel()
+
+	// database/sql closes Rows after QueryRow scans its first result. Do not
+	// treat that normal path as cancellation: consume the protocol tail through
+	// ReadyForQuery so the transaction/connection remains usable. Bound the
+	// drain; a slow or unbounded result is discarded instead of blocking forever.
 	deadline := time.Now().Add(r.conn.config.CancelTimeout)
 	_ = r.conn.network.SetReadDeadline(deadline)
 	defer r.conn.network.SetReadDeadline(time.Time{})
+
+	var closeErr error
 	for {
 		message, err := r.conn.read()
 		if err != nil {
@@ -65,20 +69,37 @@ func (r *rows) Close() error {
 			return nil
 		}
 		switch message.Type {
+		case 'D', 'C', 'A':
+			// Remaining rows, command completion, and notifications are drained.
 		case 'E':
-			if r.operationErr == nil {
-				r.operationErr = parseError(message.Body)
+			if closeErr == nil {
+				closeErr = parseError(message.Body)
 			}
 		case 'N':
 			r.conn.lastNotice = parseError(message.Body)
-		case 'Z':
-			if len(message.Body) == 1 {
-				r.conn.txStatus = message.Body[0]
+		case 'S':
+			name, value, parseErr := parseParameterStatus(message.Body)
+			if parseErr != nil {
+				r.finishBad()
+				return parseErr
 			}
-			r.conn.bad.Store(true)
-			_ = r.conn.network.Close()
+			r.conn.parameters[name] = value
+		case 'Z':
+			if len(message.Body) != 1 {
+				r.finishBad()
+				return errors.New("postgres: malformed ReadyForQuery")
+			}
+			r.conn.txStatus = message.Body[0]
+			if r.ctx != nil && r.ctx.Err() != nil {
+				// A CancelRequest may still be in flight. Never reuse this backend.
+				r.conn.bad.Store(true)
+				_ = r.conn.network.Close()
+			}
 			r.finish()
-			return nil
+			return closeErr
+		default:
+			r.finishBad()
+			return fmt.Errorf("postgres: unexpected rows close response %q", message.Type)
 		}
 	}
 }

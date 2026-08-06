@@ -20,7 +20,7 @@ func TestReleaseForeignKeyIsolationAndReadOnly(t *testing.T) {
 		level sql.IsolationLevel
 		want  string
 	}{
-		{sql.LevelReadUncommitted, "read committed"},
+		{sql.LevelReadUncommitted, "read uncommitted"},
 		{sql.LevelReadCommitted, "read committed"},
 		{sql.LevelRepeatableRead, "repeatable read"},
 		{sql.LevelSerializable, "serializable"},
