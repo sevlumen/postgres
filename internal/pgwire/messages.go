@@ -2,8 +2,12 @@ package pgwire
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"math"
+	"sort"
+	"strings"
 )
 
 const (
@@ -42,14 +46,26 @@ func Startup(user, database, application string, params map[string]string) []byt
 	body.CString(user)
 	body.CString("database")
 	body.CString(database)
+	// Stable text output is part of the v1 codec contract.
 	body.CString("client_encoding")
 	body.CString("UTF8")
+	body.CString("DateStyle")
+	body.CString("ISO")
+	body.CString("bytea_output")
+	body.CString("hex")
 	if application != "" {
 		body.CString("application_name")
 		body.CString(application)
 	}
-	for key, value := range params {
-		if key == "user" || key == "database" || key == "client_encoding" || key == "application_name" {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := params[key]
+		switch key {
+		case "user", "database", "client_encoding", "DateStyle", "bytea_output", "application_name":
 			continue
 		}
 		body.CString(key)
@@ -65,7 +81,13 @@ func Query(sql string) []byte {
 	return Typed('Q', body.Bytes)
 }
 
-func ExtendedQuery(sql string, params [][]byte, nulls []bool) []byte {
+func ExtendedQuery(sql string, params [][]byte, nulls []bool) ([]byte, error) {
+	if strings.IndexByte(sql, 0) >= 0 {
+		return nil, errors.New("pgwire: query contains a NUL byte")
+	}
+	if len(params) > math.MaxInt16 {
+		return nil, fmt.Errorf("pgwire: too many parameters: %d", len(params))
+	}
 	var out []byte
 	var parse Buffer
 	parse.CString("")
@@ -83,6 +105,9 @@ func ExtendedQuery(sql string, params [][]byte, nulls []bool) []byte {
 			bind.Int32(-1)
 			continue
 		}
+		if len(value) > math.MaxInt32 {
+			return nil, fmt.Errorf("pgwire: parameter %d is too large", index+1)
+		}
 		bind.Int32(int32(len(value)))
 		bind.Raw(value)
 	}
@@ -99,7 +124,7 @@ func ExtendedQuery(sql string, params [][]byte, nulls []bool) []byte {
 	execute.Int32(0)
 	out = append(out, Typed('E', execute.Bytes)...)
 	out = append(out, Typed('S', nil)...)
-	return out
+	return out, nil
 }
 
 func SASLInitial(mechanism, initial string) []byte {
