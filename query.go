@@ -27,7 +27,11 @@ func (c *conn) exec(ctx context.Context, query string, encoded *encodedArguments
 	}
 	clearReadDeadline := c.setReadDeadlineForContext(ctx)
 	defer clearReadDeadline()
-	if err := c.writeUnlocked(ctx, pgwire.ExtendedQuery(query, values, nulls)); err != nil {
+	payload, err := pgwire.ExtendedQuery(query, values, nulls)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.writeUnlocked(ctx, payload); err != nil {
 		c.bad.Store(true)
 		return nil, driver.ErrBadConn
 	}
@@ -105,7 +109,13 @@ func (c *conn) query(ctx context.Context, query string, encoded *encodedArgument
 		values, nulls = encoded.values, encoded.nulls
 	}
 	clearReadDeadline := c.setReadDeadlineForContext(ctx)
-	if err := c.writeUnlocked(ctx, pgwire.ExtendedQuery(query, values, nulls)); err != nil {
+	payload, err := pgwire.ExtendedQuery(query, values, nulls)
+	if err != nil {
+		clearReadDeadline()
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := c.writeUnlocked(ctx, payload); err != nil {
 		clearReadDeadline()
 		c.bad.Store(true)
 		c.mu.Unlock()

@@ -18,6 +18,9 @@ type encodedArguments struct {
 func encodeArguments(args []driver.NamedValue) (*encodedArguments, error) {
 	result := &encodedArguments{values: make([][]byte, len(args)), nulls: make([]bool, len(args))}
 	for i, arg := range args {
+		if arg.Name != "" {
+			return nil, fmt.Errorf("postgres: named argument %q is unsupported; use positional parameters", arg.Name)
+		}
 		value, isNull, err := encodeText(arg.Value)
 		if err != nil {
 			return nil, fmt.Errorf("postgres: encode argument %d: %w", i+1, err)
@@ -53,6 +56,8 @@ func normalizeValue(value any) (any, error) {
 		return int64(typed), nil
 	case uint64:
 		return uint64ToInt64(typed)
+	case float32:
+		return float64(typed), nil
 	case fmt.Stringer:
 		return typed.String(), nil
 	}

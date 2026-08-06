@@ -56,10 +56,15 @@ type Config struct {
 func ParseConfig(dsn string) (Config, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return Config{}, fmt.Errorf("postgres: parse DSN: %w", err)
+		// Never include the original DSN or parser error here: either may
+		// contain credentials from the URL authority.
+		return Config{}, errors.New("postgres: invalid DSN")
 	}
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
 		return Config{}, fmt.Errorf("postgres: unsupported DSN scheme %q", u.Scheme)
+	}
+	if u.Fragment != "" {
+		return Config{}, errors.New("postgres: DSN fragments are not supported")
 	}
 	cfg := Config{
 		Host:           u.Hostname(),
@@ -152,6 +157,23 @@ func (c *Config) Validate() error {
 	}
 	if c.RuntimeParams == nil {
 		c.RuntimeParams = make(map[string]string)
+	}
+	for name, value := range map[string]string{
+		"host": c.Host, "user": c.User, "password": c.Password,
+		"database": c.Database, "server_name": c.ServerName,
+		"application_name": c.ApplicationName,
+	} {
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("postgres: %s contains a NUL byte", name)
+		}
+	}
+	for key, value := range c.RuntimeParams {
+		if key == "" {
+			return errors.New("postgres: runtime parameter name is empty")
+		}
+		if strings.ContainsRune(key, '\x00') || strings.ContainsRune(value, '\x00') {
+			return errors.New("postgres: runtime parameter contains a NUL byte")
+		}
 	}
 	return nil
 }
