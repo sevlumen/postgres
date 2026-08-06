@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	postgres "github.com/sevlumen/postgres"
 )
+
+var tableSequence atomic.Uint64
 
 func openDatabase(t *testing.T) *sql.DB {
 	t.Helper()
@@ -23,8 +26,8 @@ func openDatabase(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(8)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -34,26 +37,38 @@ func openDatabase(t *testing.T) *sql.DB {
 	return db
 }
 
+func createTable(t *testing.T, db *sql.DB, prefix, definition string) string {
+	t.Helper()
+	name := fmt.Sprintf("sevlumen_%s_%d_%d", prefix, os.Getpid(), tableSequence.Add(1))
+	if _, err := db.ExecContext(context.Background(), "CREATE TABLE "+name+" ("+definition+")"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = db.ExecContext(ctx, "DROP TABLE IF EXISTS "+name+" CASCADE")
+	})
+	return name
+}
+
 func TestQueryExecTypesAndPreparedStatements(t *testing.T) {
 	db := openDatabase(t)
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `CREATE TEMP TABLE driver_values (
+	table := createTable(t, db, "values", `
 		id bigint PRIMARY KEY,
 		name text NOT NULL,
 		active boolean NOT NULL,
 		payload bytea,
 		created_at timestamptz NOT NULL
-	)`); err != nil {
-		t.Fatal(err)
-	}
+	`)
 	created := time.Now().UTC().Truncate(time.Microsecond)
 	payload := []byte{0, 1, 2, 255}
-	statement, err := db.PrepareContext(ctx, `INSERT INTO driver_values(id,name,active,payload,created_at) VALUES($1,$2,$3,$4,$5)`)
+	statement, err := db.PrepareContext(context.Background(),
+		"INSERT INTO "+table+"(id,name,active,payload,created_at) VALUES($1,$2,$3,$4,$5)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer statement.Close()
-	result, err := statement.ExecContext(ctx, int64(1), "identity", true, payload, created)
+	result, err := statement.ExecContext(context.Background(), int64(1), "identity", true, payload, created)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +81,9 @@ func TestQueryExecTypesAndPreparedStatements(t *testing.T) {
 	var active bool
 	var returnedPayload []byte
 	var returnedCreated time.Time
-	if err := db.QueryRowContext(ctx, `SELECT id,name,active,payload,created_at FROM driver_values WHERE id=$1`, int64(1)).Scan(&id, &name, &active, &returnedPayload, &returnedCreated); err != nil {
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT id,name,active,payload,created_at FROM "+table+" WHERE id=$1", int64(1)).
+		Scan(&id, &name, &active, &returnedPayload, &returnedCreated); err != nil {
 		t.Fatal(err)
 	}
 	if id != 1 || name != "identity" || !active || string(returnedPayload) != string(payload) || !returnedCreated.Equal(created) {
@@ -76,15 +93,13 @@ func TestQueryExecTypesAndPreparedStatements(t *testing.T) {
 
 func TestTransactionCommitRollbackAndSQLState(t *testing.T) {
 	db := openDatabase(t)
+	table := createTable(t, db, "tx_values", `id bigint PRIMARY KEY`)
 	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `CREATE TEMP TABLE tx_values (id bigint PRIMARY KEY)`); err != nil {
-		t.Fatal(err)
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_values(id) VALUES($1)`, int64(1)); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO "+table+"(id) VALUES($1)", int64(1)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -94,21 +109,17 @@ func TestTransactionCommitRollbackAndSQLState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_values(id) VALUES($1)`, int64(2)); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO "+table+"(id) VALUES($1)", int64(2)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM tx_values`).Scan(&count); err != nil {
-		t.Fatal(err)
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if count != 1 {
-		t.Fatalf("count=%d, want 1", count)
-	}
-	_, err = db.ExecContext(ctx, `INSERT INTO tx_values(id) VALUES($1)`, int64(1))
-	if err == nil || !postgres.IsUniqueViolation(err) {
+	if _, err := db.ExecContext(ctx, "INSERT INTO "+table+"(id) VALUES($1)", int64(1)); err == nil || !postgres.IsUniqueViolation(err) {
 		t.Fatalf("expected unique violation, got %v", err)
 	}
 }
@@ -132,7 +143,7 @@ func TestCancellationKeepsPoolUsable(t *testing.T) {
 
 func TestConcurrentPoolUse(t *testing.T) {
 	db := openDatabase(t)
-	const workers = 16
+	const workers = 32
 	var wait sync.WaitGroup
 	errorsCh := make(chan error, workers)
 	for i := 0; i < workers; i++ {
