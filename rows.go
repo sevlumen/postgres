@@ -75,6 +75,8 @@ func (r *rows) Close() error {
 			if len(message.Body) == 1 {
 				r.conn.txStatus = message.Body[0]
 			}
+			r.conn.bad.Store(true)
+			_ = r.conn.network.Close()
 			r.finish()
 			return nil
 		}
@@ -128,6 +130,8 @@ func (r *rows) Next(dest []driver.Value) error {
 			r.conn.txStatus = message.Body[0]
 			r.finish()
 			if r.ctx != nil && r.ctx.Err() != nil {
+				r.conn.bad.Store(true)
+				_ = r.conn.network.Close()
 				return r.ctx.Err()
 			}
 			if r.operationErr != nil {

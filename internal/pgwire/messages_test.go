@@ -29,7 +29,10 @@ func TestReadMessageRejectsInvalidLength(t *testing.T) {
 }
 
 func TestExtendedQuerySeparatesParameters(t *testing.T) {
-	payload := ExtendedQuery("SELECT $1", [][]byte{[]byte("payload') DROP TABLE users; --")}, []bool{false})
+	payload, err := ExtendedQuery("SELECT $1", [][]byte{[]byte("payload') DROP TABLE users; --")}, []bool{false})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Contains(payload, []byte("SELECT $1")) {
 		t.Fatal("query missing")
 	}
@@ -46,7 +49,17 @@ func FuzzReadMessageNeverPanics(f *testing.F) {
 	binary.BigEndian.PutUint32(seed[1:], 5)
 	seed = append(seed, 'I')
 	f.Add(seed)
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzx(func(t *testing.T, data []byte) {
 		_, _ = ReadMessage(bytes.NewReader(data), 1<<20)
 	})
+}
+
+func TestExtendedQueryRejectsNULAndTooManyParameters(t *testing.T) {
+	if _, err := ExtendedQuery("SELECT \x00", nil, nil); err == nil {
+		t.Fatal("expected NUL query rejection")
+	}
+	params := make([][]byte, 32768)
+	if _, err := ExtendedQuery("SELECT 1", params, nil); err == nil {
+		t.Fatal("expected parameter count rejection")
+	}
 }

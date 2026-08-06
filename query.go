@@ -78,6 +78,8 @@ func (c *conn) exec(ctx context.Context, query string, encoded *encodedArguments
 			}
 			c.txStatus = message.Body[0]
 			if ctx.Err() != nil {
+				c.bad.Store(true)
+				_ = c.network.Close()
 				return nil, ctx.Err()
 			}
 			if operationErr != nil {
@@ -155,6 +157,8 @@ func (c *conn) query(ctx context.Context, query string, encoded *encodedArgument
 			c.txStatus = message.Body[0]
 			result.finish()
 			if ctx.Err() != nil {
+				c.bad.Store(true)
+				_ = c.network.Close()
 				return nil, ctx.Err()
 			}
 			if result.operationErr != nil {
