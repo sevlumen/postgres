@@ -49,7 +49,7 @@ func FuzzReadMessageNeverPanics(f *testing.F) {
 	binary.BigEndian.PutUint32(seed[1:], 5)
 	seed = append(seed, 'I')
 	f.Add(seed)
-	f.Fuzx(func(t *testing.T, data []byte) {
+	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = ReadMessage(bytes.NewReader(data), 1<<20)
 	})
 }
