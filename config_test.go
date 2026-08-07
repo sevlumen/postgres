@@ -34,3 +34,12 @@ func TestConfigDefaultsAndValidation(t *testing.T) {
 		t.Fatal("expected unsupported sslmode error")
 	}
 }
+
+func TestConfigRejectsReservedRuntimeParameters(t *testing.T) {
+	for _, name := range []string{"user", "database", "password", "client_encoding", "DateStyle", "bytea_output", "application_name"} {
+		config := Config{User: "identity", RuntimeParams: map[string]string{name: "unexpected"}}
+		if err := config.Validate(); err == nil {
+			t.Fatalf("expected reserved runtime parameter %q to be rejected", name)
+		}
+	}
+}
