@@ -34,6 +34,24 @@ func normalizeValue(value any) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
+
+	valueOf := reflect.ValueOf(value)
+	if valueOf.Kind() == reflect.Pointer && valueOf.IsNil() {
+		return nil, nil
+	}
+	if valuer, ok := value.(driver.Valuer); ok {
+		converted, err := valuer.Value()
+		if err != nil {
+			return nil, fmt.Errorf("driver Valuer: %w", err)
+		}
+		if !driver.IsValue(converted) {
+			return nil, fmt.Errorf("driver Valuer returned unsupported type %T", converted)
+		}
+		return converted, nil
+	}
+	if valueOf.Kind() == reflect.Pointer {
+		return normalizeValue(valueOf.Elem().Interface())
+	}
 	if driver.IsValue(value) {
 		return value, nil
 	}
@@ -61,7 +79,6 @@ func normalizeValue(value any) (any, error) {
 	case fmt.Stringer:
 		return typed.String(), nil
 	}
-	valueOf := reflect.ValueOf(value)
 	if valueOf.Kind() == reflect.Array && valueOf.Len() == 16 && valueOf.Type().Elem().Kind() == reflect.Uint8 {
 		bytes := make([]byte, 16)
 		reflect.Copy(reflect.ValueOf(bytes), valueOf)
@@ -69,6 +86,7 @@ func normalizeValue(value any) (any, error) {
 	}
 	return nil, fmt.Errorf("unsupported argument type %T", value)
 }
+
 func uint64ToInt64(value uint64) (int64, error) {
 	if value > uint64(^uint64(0)>>1) {
 		return 0, fmt.Errorf("uint64 %d overflows int64", value)
