@@ -60,7 +60,9 @@ func (c *conn) Close() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_ = c.writeUnlocked(context.Background(), pgwire.Terminate())
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.CancelTimeout)
+	_ = c.writeUnlocked(ctx, pgwire.Terminate())
+	cancel()
 	return c.network.Close()
 }
 
@@ -83,7 +85,7 @@ func (c *conn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx
 	if _, err := c.exec(ctx, query, nil); err != nil {
 		return nil, err
 	}
-	return &tx{conn: c}, nil
+	return &tx{conn: c, ctx: ctx}, nil
 }
 
 func isolationClause(level driver.IsolationLevel) (string, error) {
