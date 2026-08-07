@@ -173,6 +173,7 @@ func (c *conn) startup(ctx context.Context) error {
 		return fmt.Errorf("postgres: send startup message: %w", err)
 	}
 	var scramClient *scram.Client
+	scramFinalVerified := false
 	authenticated := false
 	for {
 		message, err := c.read()
@@ -188,6 +189,9 @@ func (c *conn) startup(ctx context.Context) error {
 			}
 			switch code {
 			case 0:
+				if scramClient != nil && !scramFinalVerified {
+					return errors.New("postgres: SCRAM authentication completed without a verified server signature")
+				}
 				authenticated = true
 			case 3:
 				if !c.secure && !c.config.AllowInsecureAuthentication {
@@ -197,16 +201,22 @@ func (c *conn) startup(ctx context.Context) error {
 					return err
 				}
 			case 5:
+				if !c.secure && !c.config.AllowInsecureAuthentication {
+					return errors.New("postgres: MD5 password authentication requires TLS")
+				}
 				salt, err := cursor.Bytes(4)
 				if err != nil {
 					return err
 				}
 				digest1 := md5.Sum([]byte(c.config.Password + c.config.User))
 				digest2 := md5.Sum(append([]byte(hex.EncodeToString(digest1[:])), salt...))
-				if err := c.write(ctx, pgwire.Password("md5"+hex.EncodeToString(digest2[:]))); err != nil {
+				if err := c.write(ctx, pgwire.Password("md5"+hex.EncodeToString(digest2[:])); err != nil {
 					return err
 				}
 			case 10:
+				if scramClient != nil || authenticated {
+					return errors.New("postgres: unexpected SCRAM authentication restart")
+				}
 				mechanisms, err := parseMechanisms(cursor.Rest())
 				if err != nil {
 					return err
@@ -233,12 +243,13 @@ func (c *conn) startup(ctx context.Context) error {
 					return err
 				}
 			case 12:
-				if scramClient == nil {
+				if scramClient == nil || scramFinalVerified {
 					return errors.New("postgres: unexpected SCRAM final message")
 				}
 				if err := scramClient.Final(string(cursor.Rest())); err != nil {
 					return err
 				}
+				scramFinalVerified = true
 			default:
 				return fmt.Errorf("postgres: unsupported authentication request %d", code)
 			}
