@@ -2,7 +2,7 @@
 
 A PostgreSQL-native `database/sql` driver written in Go without `pgx`, `libpq`, or C dependencies.
 
-> Status: `v1.0.0-rc.1`. Do not tag `v1.0.0` until every gate in [docs/release-checklist.md](docs/release-checklist.md) passes on PostgreSQL 14 through 18.
+> Status: stable `v1.0.0`, validated on Go 1.23/current and PostgreSQL 14 through 18.
 
 ## v1 scope
 
@@ -33,7 +33,7 @@ Those exclusions do not block Identity workloads and prevent the first stable AP
 ## Install
 
 ```bash
-go get github.com/sevlumen/postgres@v1.0.0-rc.1
+go get github.com/sevlumen/postgres@v1.0.0
 ```
 
 ## Recommended usage
@@ -142,7 +142,7 @@ if postgres.IsUniqueViolation(err) {
 
 The default is `sslmode=verify-full`. Production services should keep that setting and provide a certificate chain trusted by the operating system or a custom `RootCAs` pool.
 
-`sslmode=require` encrypts the transport but does not verify the server identity. `sslmode=disable` should be limited to local development and isolated CI.
+`sslmode=require` encrypts the transport but does not verify the server identity. `sslmode=disable` should be limited to local development and isolated CI. Cleartext and MD5 password authentication are rejected on an unencrypted transport unless `AllowInsecureAuthentication` is explicitly enabled.
 
 ## Validation
 
