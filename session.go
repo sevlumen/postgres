@@ -105,7 +105,11 @@ func (s *Session) Discard() error {
 	if errors.Is(rawErr, driver.ErrBadConn) {
 		rawErr = nil
 	}
-	return errors.Join(rawErr, s.conn.Close())
+	closeErr := s.conn.Close()
+	if errors.Is(closeErr, sql.ErrConnDone) {
+		closeErr = nil
+	}
+	return errors.Join(rawErr, closeErr)
 }
 
 func (s *Session) validate() error {
