@@ -210,7 +210,7 @@ func (c *conn) startup(ctx context.Context) error {
 				}
 				digest1 := md5.Sum([]byte(c.config.Password + c.config.User))
 				digest2 := md5.Sum(append([]byte(hex.EncodeToString(digest1[:])), salt...))
-				if err := c.write(ctx, pgwire.Password("md5"+hex.EncodeToString(digest2[:])); err != nil {
+				if err := c.write(ctx, pgwire.Password("md5"+hex.EncodeToString(digest2[:]))); err != nil {
 					return err
 				}
 			case 10:
