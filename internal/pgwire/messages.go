@@ -65,7 +65,7 @@ func Startup(user, database, application string, params map[string]string) []byt
 	for _, key := range keys {
 		value := params[key]
 		switch key {
-		case "user", "database", "client_encoding", "DateStyle", "bytea_output", "application_name":
+		case "user", "database", "password", "client_encoding", "DateStyle", "bytea_output", "application_name":
 			continue
 		}
 		body.CString(key)
