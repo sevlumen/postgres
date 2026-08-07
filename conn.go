@@ -15,6 +15,11 @@ import (
 	"github.com/sevlumen/postgres/internal/pgwire"
 )
 
+// ErrOperationOutcomeUnknown means a connection failed after an operation may
+// have reached PostgreSQL. The driver returns this instead of driver.ErrBadConn
+// so database/sql does not retry a potentially non-idempotent statement.
+var ErrOperationOutcomeUnknown = errors.New("postgres: connection lost after operation started; outcome is unknown")
+
 type conn struct {
 	config  Config
 	network net.Conn
@@ -149,18 +154,32 @@ func (c *conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 	return c.QueryContext(context.Background(), query, named)
 }
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if c.closed.Load() || c.bad.Load() {
+		return nil, driver.ErrBadConn
+	}
 	encoded, err := encodeArguments(args)
 	if err != nil {
 		return nil, err
 	}
-	return c.exec(ctx, query, encoded)
+	result, err := c.exec(ctx, query, encoded)
+	if err == driver.ErrBadConn {
+		return nil, ErrOperationOutcomeUnknown
+	}
+	return result, err
 }
 func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.closed.Load() || c.bad.Load() {
+		return nil, driver.ErrBadConn
+	}
 	encoded, err := encodeArguments(args)
 	if err != nil {
 		return nil, err
 	}
-	return c.query(ctx, query, encoded)
+	result, err := c.query(ctx, query, encoded)
+	if err == driver.ErrBadConn {
+		return nil, ErrOperationOutcomeUnknown
+	}
+	return result, err
 }
 
 func (c *conn) write(ctx context.Context, payload []byte) error {
@@ -223,6 +242,13 @@ func (c *conn) startCancelWatcher(ctx context.Context) func() {
 			// Waiting is essential: a cancellation goroutine that outlives the
 			// operation could otherwise cancel the next query on this backend.
 			<-finished
+			// A concurrent cancellation may win the select after PostgreSQL has
+			// already returned ReadyForQuery. Discard this backend so a delayed
+			// CancelRequest can never affect the next operation.
+			if ctx.Err() != nil {
+				c.bad.Store(true)
+				_ = c.network.Close()
+			}
 		})
 	}
 }
