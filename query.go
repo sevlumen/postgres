@@ -33,6 +33,10 @@ func (c *conn) exec(ctx context.Context, query string, encoded *encodedArguments
 	}
 	if err := c.writeUnlocked(ctx, payload); err != nil {
 		c.bad.Store(true)
+		_ = c.network.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, driver.ErrBadConn
 	}
 	stopCancel := c.startCancelWatcher(ctx)
@@ -44,6 +48,10 @@ func (c *conn) exec(ctx context.Context, query string, encoded *encodedArguments
 		message, err := c.read()
 		if err != nil {
 			c.bad.Store(true)
+			_ = c.network.Close()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, driver.ErrBadConn
 		}
 		switch message.Type {
@@ -120,7 +128,11 @@ func (c *conn) query(ctx context.Context, query string, encoded *encodedArgument
 	if err := c.writeUnlocked(ctx, payload); err != nil {
 		clearReadDeadline()
 		c.bad.Store(true)
+		_ = c.network.Close()
 		c.mu.Unlock()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, driver.ErrBadConn
 	}
 	result := &rows{conn: c, ctx: ctx, stopCancel: c.startCancelWatcher(ctx), clearDeadline: clearReadDeadline, locked: true}
@@ -128,6 +140,9 @@ func (c *conn) query(ctx context.Context, query string, encoded *encodedArgument
 		message, err := c.read()
 		if err != nil {
 			result.finishBad()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, driver.ErrBadConn
 		}
 		switch message.Type {
