@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0] - 2026-08-07
+
+### Added
+
+- pinned `Session` acquisition over `database/sql` for advisory locks and other session-scoped operations;
+- explicit `Session.Discard` for backends that must never return to the pool;
+- trusted multi-statement `ExecScriptContext` through PostgreSQL's simple-query protocol;
+- script support for dollar-quoted procedural bodies and deterministic command-tag reporting;
+- PostgreSQL 14–18 integration coverage for session pinning, script transactions, cancellation, protocol recovery, and pool reuse.
+
+### Security
+
+- keep application values on parameterized `ExecContext`, `QueryContext`, and `QueryRowContext` paths;
+- document that script input is trusted developer-authored SQL and must never contain interpolated request data;
+- discard canceled or protocol-uncertain script backends before they can be reused.
+
 ## [1.0.0] - 2026-08-07
 
 ### Added
