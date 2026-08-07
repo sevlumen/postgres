@@ -112,6 +112,9 @@ func (r *rows) Next(dest []driver.Value) error {
 		message, err := r.conn.read()
 		if err != nil {
 			r.finishBad()
+			if r.ctx != nil && r.ctx.Err() != nil {
+				return r.ctx.Err()
+			}
 			return driver.ErrBadConn
 		}
 		switch message.Type {
