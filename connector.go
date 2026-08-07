@@ -78,6 +78,13 @@ func connect(ctx context.Context, config Config) (*conn, error) {
 		}
 	}()
 
+	// The connect timeout covers the complete handshake, including the
+	// PostgreSQL SSLRequest response. A TCP peer that accepts but never replies
+	// must not be able to hold a connection attempt indefinitely.
+	if deadline, ok := connectCtx.Deadline(); ok {
+		_ = networkConn.SetDeadline(deadline)
+	}
+
 	secure := false
 	if config.TLSMode != TLSDisable {
 		if _, err := networkConn.Write(pgwire.Untyped(pgwire.SSLRequestCode, nil)); err != nil {
@@ -107,9 +114,6 @@ func connect(ctx context.Context, config Config) (*conn, error) {
 	}
 
 	connection := newConn(networkConn, config, secure)
-	if deadline, ok := connectCtx.Deadline(); ok {
-		_ = networkConn.SetDeadline(deadline)
-	}
 	if err := connection.startup(connectCtx); err != nil {
 		return nil, err
 	}
@@ -127,7 +131,9 @@ func buildTLSConfig(config Config) (*tls.Config, error) {
 	} else {
 		tlsConfig = &tls.Config{}
 	}
-	tlsConfig.MinVersion = tls.VersionTLS12
+	if tlsConfig.MinVersion == 0 || tlsConfig.MinVersion < tls.VersionTLS12 {
+		tlsConfig.MinVersion = tls.VersionTLS12
+	}
 	if tlsConfig.ServerName == "" {
 		tlsConfig.ServerName = config.ServerName
 	}

@@ -1,0 +1,128 @@
+name: Publish v1.0.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/releases/v1.0.0.request
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.23.x", "stable"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - run: go mod verify
+      - run: go vet ./...
+      - run: go test -race ./... -count=1
+
+  postgres:
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [14, 15, 16, 17, 18]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SEVLUMEN_POSTGRES_TEST_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - run: go test -race ./integration -count=3 -timeout=10m
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - run: go test ./internal/pgwire -run '^$' -fuzz '^FuzzReadMessageNeverPanics$' -fuzztime=30s
+
+  vulnerability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -test ./...
+
+  publish:
+    needs: [unit, postgres, fuzz-smoke, vulnerability]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Verify release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'const Version = "1.0.0"' version.go
+          grep -Fq '## [1.0.0]' CHANGELOG.md
+          test -z "$(git status --porcelain)"
+      - name: Create annotated release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --tags origin refs/tags/v1.0.0 >/dev/null 2>&1; then
+            git fetch --force origin refs/tags/v1.0.0:refs/tags/v1.0.0
+            test "$(git rev-list -n 1 v1.0.0)" = "${GITHUB_SHA}"
+          else
+            git tag -a v1.0.0 "${GITHUB_SHA}" -m "Sevlumen PostgreSQL v1.0.0"
+            git push origin refs/tags/v1.0.0
+          fi
+      - name: Build deterministic source archive and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=tar --prefix="sevlumen-postgres-v1.0.0/" "${GITHUB_SHA}" \
+            | gzip -n > dist/sevlumen-postgres-v1.0.0.tar.gz
+          printf '%s\n' "${GITHUB_SHA}" > dist/SOURCE_COMMIT
+          (cd dist && sha256sum sevlumen-postgres-v1.0.0.tar.gz SOURCE_COMMIT > SHA256SUMS)
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create v1.0.0 dist/* \
+            --verify-tag \
+            --notes-file .github/releases/v1.0.0.md \
+            --title "Sevlumen PostgreSQL v1.0.0"

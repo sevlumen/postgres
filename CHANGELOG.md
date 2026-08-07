@@ -11,6 +11,7 @@
 - extended-query parameter binding;
 - query, exec, statement, transaction, pool, cancellation, and safe early-row-close behavior;
 - structured PostgreSQL errors and SQLSTATE helpers;
+- `ErrOperationOutcomeUnknown` for ambiguous connection failures after an operation may have reached PostgreSQL;
 - text codecs required by Identity workloads;
 - Identity refresh-token rotation, transaction, failure-injection, malformed-frame fuzz, race, and PostgreSQL integration tests;
 - release gates for Go 1.23/current, Linux, macOS, Windows, and PostgreSQL 14 through 18.
@@ -25,6 +26,9 @@
 
 ### Fixed
 
+- apply `ConnectTimeout` to TCP dial, SSL negotiation, TLS handshake, and startup;
+- preserve a caller-supplied TLS minimum stricter than TLS 1.2;
+- prevent `database/sql` from automatically retrying operations whose outcome is unknown after a connection failure;
 - prevent delayed `CancelRequest` packets from canceling a later query on a reused backend connection;
 - drain `Rows.Close` through `ReadyForQuery` with a bounded timeout so `QueryRow` and transactions remain usable;
 - preserve `context.Canceled` and `context.DeadlineExceeded` instead of masking them as bad-connection errors;
