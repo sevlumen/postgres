@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.1] - 2026-08-07
+
+### Fixed
+
+- restore standard `database/sql` pointer-parameter behavior through the custom named-value checker;
+- dereference non-nil pointers to supported positional parameter values;
+- encode nil pointers as PostgreSQL `NULL`;
+- honor `driver.Valuer` implementations such as `sql.NullString` while preserving wrapped conversion errors;
+- add PostgreSQL 14–18 integration coverage for pointer and Valuer parameters.
+
 ## [1.1.0] - 2026-08-07
 
 ### Added
