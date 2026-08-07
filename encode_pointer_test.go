@@ -73,20 +73,18 @@ func TestEncodeArgumentsSupportsPointerValues(t *testing.T) {
 	}
 }
 
+var errFailingValuer = errors.New("valuer failed")
+
 type failingValuer struct{}
 
 func (failingValuer) Value() (driver.Value, error) {
-	return nil, errors.New("valuer failed")
+	return nil, errFailingValuer
 }
 
 func TestNormalizeValuePreservesValuerErrors(t *testing.T) {
 	t.Parallel()
 	_, err := normalizeValue(failingValuer{})
-	if err == nil || !errors.Is(err, errors.New("valuer failed")) {
-		// errors.New values are not comparable through errors.Is; verify the
-		// redacted wrapper still retains the original message for callers.
-		if err == nil || err.Error() != "driver Valuer: valuer failed" {
-			t.Fatalf("error = %v", err)
-		}
+	if !errors.Is(err, errFailingValuer) {
+		t.Fatalf("error = %v, want wrapped valuer error", err)
 	}
 }
