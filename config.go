@@ -47,8 +47,8 @@ type Config struct {
 	ApplicationName string
 	RuntimeParams   map[string]string
 
-	// AllowInsecureAuthentication permits cleartext password authentication on
-	// an unencrypted transport. It is false by default.
+	// AllowInsecureAuthentication permits cleartext or MD5 password authentication
+	// on an unencrypted transport. It is false by default.
 	AllowInsecureAuthentication bool
 }
 
@@ -173,6 +173,10 @@ func (c *Config) Validate() error {
 		}
 		if strings.ContainsRune(key, '\x00') || strings.ContainsRune(value, '\x00') {
 			return errors.New("postgres: runtime parameter contains a NUL byte")
+		}
+		switch strings.ToLower(key) {
+		case "user", "database", "password", "client_encoding", "datestyle", "bytea_output", "application_name":
+			return fmt.Errorf("postgres: runtime parameter %q is reserved", key)
 		}
 	}
 	return nil
